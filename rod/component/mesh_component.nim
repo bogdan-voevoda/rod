@@ -445,6 +445,7 @@ method deserialize*(m: MeshComponent, j: JsonNode, s: Serializer) =
     s.deserializeValue(j, "reflectionPercent", m.material.reflectionPercent)
     s.deserializeValue(j, "falloffPercent", m.material.falloffPercent)
     s.deserializeValue(j, "maskPercent", m.material.maskPercent)
+
     deserializeImage(j{"matcapTextureR"}, s) do(img: Image, err: string): m.material.matcapTextureR = img
     deserializeImage(j{"matcapTextureG"}, s) do(img: Image, err: string): m.material.matcapTextureG = img
     deserializeImage(j{"matcapTextureB"}, s) do(img: Image, err: string): m.material.matcapTextureB = img

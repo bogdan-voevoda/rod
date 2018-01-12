@@ -458,20 +458,20 @@ proc loadColladaFromStream(s: Stream): ColladaScene =
     s.close()
 
 # --------------- TODO ------
-# proc loadSceneAsync*(resourcePath: string, handler: proc(n: Node)) =
-#     openStreamForUrl(resourcePath) do(s: Stream, err: string):
-#         let colladaScene = loadColladaFromStream(s)
-#         let res = setupFromColladaNode(colladaScene.rootNode, colladaScene, resourcePath)
-#         for anim in colladaScene.animations:
-#             discard animationWithCollada(res, anim)
-#         handler(res)
-
 proc loadSceneAsync*(resourcePath: string, handler: proc(n: Node)) =
-    sharedAssetManager().getAssetAtPath(resourcePath) do(colladaScene: ColladaScene, err: string):
+    openStreamForUrl(resourcePath) do(s: Stream, err: string):
+        let colladaScene = loadColladaFromStream(s)
         let res = setupFromColladaNode(colladaScene.rootNode, colladaScene, resourcePath)
         for anim in colladaScene.animations:
             discard animationWithCollada(res, anim)
         handler(res)
+
+# proc loadSceneAsync*(resourcePath: string, handler: proc(n: Node)) =
+#     sharedAssetManager().getAssetAtPath(resourcePath) do(colladaScene: ColladaScene, err: string):
+#         let res = setupFromColladaNode(colladaScene.rootNode, colladaScene, resourcePath)
+#         for anim in colladaScene.animations:
+#             discard animationWithCollada(res, anim)
+#         handler(res)
 
 registerAssetLoader(["dae"]) do(url: string, callback: proc(s: ColladaScene)):
     openStreamForUrl(url) do(s: Stream, err: string):
