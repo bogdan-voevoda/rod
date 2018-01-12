@@ -136,6 +136,8 @@ when loadingAndSavingAvailable:
 
         except:
             error "Can't save composition at ", newPath
+            error "Exception caught: ", getCurrentExceptionMsg()
+            error "stack trace: ", getCurrentException().getStackTrace()
 
     proc openComposition*(e: Editor, p: string)=
         try:
@@ -197,9 +199,14 @@ when loadingAndSavingAvailable:
         di.title = "Save composition"
         let path = di.show()
         if not path.isNil:
-            var s = Serializer.new()
-            var sData = selectedNode.serialize(s)
-            s.save(sData, path)
+            try:
+                var s = Serializer.new()
+                var sData = selectedNode.serialize(s)
+                s.save(sData, path)
+            except:
+                error "Exception caught: ", getCurrentExceptionMsg()
+                error "stack trace: ", getCurrentException().getStackTrace()
+
 
     proc loadNode(editor: Editor) =
         var di: DialogInfo
@@ -228,12 +235,12 @@ when loadingAndSavingAvailable:
 
                 editor.sceneTreeDidChange()
             except:
-                error "ERROR:: Resource at path doesn't load ", path
+                error "Can't load composition at ", path
                 error "Exception caught: ", getCurrentExceptionMsg()
                 error "stack trace: ", getCurrentException().getStackTrace()
 
 else:
-    proc saveComposition*(e: Editor, c: CompositionDocument, saveAs = false) = discard
+    proc saveComposition*(e: Editor, c: CompositionDocument, saveAs = false)= discard
     proc openComposition*(e: Editor, p: string) = discard
 
 proc selectNode*(editor: Editor, node: Node) =
