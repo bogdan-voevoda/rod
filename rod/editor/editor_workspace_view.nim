@@ -1,8 +1,8 @@
-import math, algorithm, strutils, tables, json, logging
+import math, algorithm, strutils, tables, json, logging, ospaths
 
 import nimx / [ view, toolbar, editor / tab_view, linear_layout, button,
     font, popup_button, window, menu, notification_center, mini_profiler,
-    color_picker ]
+    color_picker, view_event_handling ]
 
 import rod / [ rod_types, node ]
 import rod / editor / [ editor_types, editor_tab_registry ]
@@ -103,9 +103,10 @@ proc addTab*(w: WorkspaceView, tb: EditorTabView)=
                 horl.setDividerPosition(dps[0], dps.len)
 
         of etaRight:
-            let dps = horl.dividerPositions()
             horl.addSubview(anchorView)
-            horl.setDividerPosition(w.frame.width - size.width, dps.len)
+            let dps = horl.dividerPositions().len
+            if dps > 0:
+                horl.setDividerPosition(w.frame.width - size.width, dps - 1)
         of etaBottom:
             verl.addSubview(anchorView)
             verl.setDividerPosition(w.frame.height - size.height, 0)
@@ -133,17 +134,25 @@ proc createCompositionEditor*(w: WorkspaceView, c: CompositionDocument = nil): E
     tabView.editor = w.editor
     var comp: CompositionDocument
     if not c.isNil:
-        when loadingAndSavingAvailable:
-            var compRoot = c.rootNode
-            if compRoot.isNil:
-                compRoot = newNodeWithUrl("file://"&c.path)
-                c.rootNode = compRoot
+        var compRoot = c.rootNode
 
-            tabview.rootNode = compRoot
-            tabView.name = splitFile(c.path).name
-            comp = c
-        else:
+        try:
+            when loadingAndSavingAvailable:
+                if compRoot.isNil:
+                    compRoot = newNodeWithUrl("file://"&c.path)
+                    c.rootNode = compRoot
+
+        except:
+            error "Exception caught: ", getCurrentExceptionMsg()
+            error "stack trace: ", getCurrentException().getStackTrace()
+
+        if compRoot.isNil:
+            error "rootNode isNil: ", getStackTrace()
             return nil
+
+        tabview.rootNode = compRoot
+        tabView.name = splitFile(c.path).name
+        comp = c
     else:
         tabView.name = "new composition"
         comp = new(CompositionDocument)
@@ -171,24 +180,23 @@ proc createCompositionEditor*(w: WorkspaceView, c: CompositionDocument = nil): E
 
 
 proc createViewMenu(w: WorkspaceView) =
-    when loadingAndSavingAvailable:
-        let m = makeMenu("View"):
-            # - "Zoom on Selection":
-            #     if not w.editor.selectedNode.isNil:
-            #         let cam = w.editor.rootNode.findNode("camera")
-            #         if not cam.isNil:
-            #             w.editor.rootNode.findNode("camera").focusOnNode(w.editor.selectedNode)
-            # - "-"
-            # - "2D":
-            #     let cam = w.editor.currentCamera()
-            #     if not cam.isNil: cam.projectionMode = cpOrtho
-            # - "3D":
-            #     let cam = w.editor.currentCamera()
-            #     if not cam.isNil: cam.projectionMode = cpPerspective
-            - "Profiler":
-                sharedProfiler().enabled = not sharedProfiler().enabled
+    let m = makeMenu("View"):
+        # - "Zoom on Selection":
+        #     if not w.editor.selectedNode.isNil:
+        #         let cam = w.editor.rootNode.findNode("camera")
+        #         if not cam.isNil:
+        #             w.editor.rootNode.findNode("camera").focusOnNode(w.editor.selectedNode)
+        # - "-"
+        # - "2D":
+        #     let cam = w.editor.currentCamera()
+        #     if not cam.isNil: cam.projectionMode = cpOrtho
+        # - "3D":
+        #     let cam = w.editor.currentCamera()
+        #     if not cam.isNil: cam.projectionMode = cpPerspective
+        - "Profiler":
+            sharedProfiler().enabled = not sharedProfiler().enabled
 
-        w.addToolbarMenu(m)
+    w.addToolbarMenu(m)
 
 when loadingAndSavingAvailable:
     proc createProjectMenu(w: WorkspaceView) =
@@ -420,3 +428,7 @@ proc createWorkspaceLayout*(window: Window, editor: Editor): WorkspaceView =
         w.editor.sceneInput = not w.editor.sceneInput
     w.createChangeBackgroundColorButton()
     result = w
+
+method onKeyDown(v: WorkspaceView, e: var Event): bool =
+    if not v.onKeyDown.isNil:
+        result = v.onKeyDown(e)

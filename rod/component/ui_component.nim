@@ -1,20 +1,11 @@
-import nimx.view
-import nimx.matrixes
-import nimx.event
-import nimx.view_event_handling
-import nimx.view_event_handling_new
-import nimx.system_logger
-import nimx.property_visitor
-
-import rod.component
-import rod.ray
-import rod.viewport
-import rod.rod_types
-import rod.node
+import nimx / [ view, matrixes, view_event_handling, property_visitor ]
+import rod / [ component, ray, viewport, node, rod_types ]
+import logging
 export UIComponent
 
 type UICompView = ref object of View
     uiComp: UIComponent
+    uiCompSubview: View
 
 method `enabled=`*(c: UIComponent, state: bool) {.base.}=
     c.mEnabled = state
@@ -24,7 +15,7 @@ proc enabled*(c: UIComponent): bool =
 
 proc view*(c: UIComponent): View =
     if not c.mView.isNil:
-        result = c.mView.subviews[0]
+        result = c.mView.UICompView.uiCompSubview
 
 proc intersectsWithUIPlane(uiComp: UIComponent, r: Ray, res: var Vector3): bool=
     let n = uiComp.node
@@ -45,7 +36,7 @@ proc intersectsWithUINode*(uiComp: UIComponent, r: Ray, res: var Vector3): bool 
 
 method convertPointToParent*(v: UICompView, p: Point): Point =
     result = newPoint(-9999999, -9999999) # Some ridiculous value
-    logi "WARNING: UICompView.convertPointToParent not implemented"
+    warn "UICompView.convertPointToParent not implemented"
 
 method convertPointFromParent*(v: UICompView, p: Point): Point =
     result = newPoint(-9999999, -9999999) # Some ridiculous value
@@ -60,16 +51,26 @@ method draw*(c: UIComponent) =
     if not c.mView.isNil:
         c.mView.recursiveDrawSubviews()
 
+proc updSuperview(c: UIComponent) =
+    if not c.mView.isNil and not c.node.sceneView.isNil:
+        c.mView.superview = c.node.sceneView
+        c.mView.window = c.node.sceneView.window
+        c.mView.addSubview(c.mView.UICompView.uiCompSubview)
+
 proc `view=`*(c: UIComponent, v: View) =
+    if not c.view.isNil:
+        c.view.removeFromSuperview()
+
+    if v == nil:
+        c.mView = nil
+        return
+
     let cv = UICompView.new(newRect(0, 0, 20, 20))
-    cv.backgroundColor = clearColor()
     cv.uiComp = c
-    cv.superview = c.node.sceneView
     c.mView = cv
     c.enabled = true
-    if not c.node.sceneView.isNil:
-        cv.window = c.node.sceneView.window
-    cv.addSubview(v)
+    cv.uiCompSubview = v
+    c.updSuperview()
 
 proc moveToWindow(v: View, w: Window) =
     v.window = w
@@ -111,9 +112,8 @@ method componentNodeWasAddedToSceneView*(ui: UIComponent) =
         sv.uiComponents = @[ui]
     else:
         sv.uiComponents.add(ui)
-        
-    if not ui.mView.isNil:
-        ui.mView.window = sv.window
+
+    ui.updSuperview()
 
 method componentNodeWillBeRemovedFromSceneView(ui: UIComponent) =
     let sv = ui.node.sceneView
@@ -121,6 +121,9 @@ method componentNodeWillBeRemovedFromSceneView(ui: UIComponent) =
         let i = sv.uiComponents.find(ui)
         if i != -1:
             sv.uiComponents.del(i)
+
+    if not ui.view.isNil:
+        ui.view.removeFromSuperview()
 
 method visitProperties*(ui: UIComponent, p: var PropertyVisitor) =
     p.visitProperty("enabled", ui.enabled)

@@ -1,24 +1,11 @@
-import nimx.context
-import nimx.types
-import nimx.image
-import nimx.render_to_image
-import nimx.portable_gl
-import nimx.animation
-import nimx.window
-import nimx.view_event_handling
-import nimx.view_event_handling_new
-import nimx.notification_center
-import nimx.system_logger
+import nimx / [ context, types, image, render_to_image, portable_gl, window,
+                view, view_event_handling, animation, notification_center ]
 
-import algorithm
-import times
-import tables
-import rod_types
-import node
+import algorithm, logging, times, tables
+import rod_types, node, ray
 import component.camera
 import rod.material.shader
 
-import ray
 export SceneView
 
 const GridVertexShader = """
@@ -73,11 +60,11 @@ template viewMatrix*(v: SceneView): Matrix4 = v.mCamera.node.worldTransform.inve
 
 proc prepareFramebuffer(v: SceneView, i: var SelfContainedImage, sz: Size) =
     if i.isNil:
-        logi "Creating buffer"
+        info "Creating buffer"
         i = imageWithSize(sz)
         i.flipVertically()
     elif i.size != sz:
-        logi "Recreating buffer"
+        info "Recreating buffer"
         i = imageWithSize(sz)
         i.flipVertically()
 
@@ -255,11 +242,11 @@ proc addLightSource*(v: SceneView, ls: LightSource) =
     if v.lightSources.len() < rod_types.maxLightsCount:
         v.lightSources[ls.node.name] = ls
     else:
-        logi "WARNING: Count of light sources is limited. Current count equals " & $rod_types.maxLightsCount
+        warn "Count of light sources is limited. Current count: ", rod_types.maxLightsCount
 
 proc removeLightSource*(v: SceneView, ls: LightSource) =
     if v.lightSources.isNil() or v.lightSources.len() <= 0:
-        logi "Current light sources count equals 0."
+        info "Current light sources count equals 0."
     else:
         v.lightSources.del(ls.node.name)
 
@@ -299,7 +286,8 @@ method onScroll*(v: SceneView, e: var Event): bool =
         result = procCall v.View.onScroll(e)
 
 method onTouchEv*(v: SceneView, e: var Event): bool =
-    if v.uiComponents.len > 0:
+    let target = v.window.mCurrentTouches.getOrDefault(e.pointerId)
+    if v.uiComponents.len > 0 and target != v:
         if e.buttonState == bsDown:
             let r = v.rayWithScreenCoords(e.localPosition)
             let intersections = v.getUiComponentsIntersectingWithRay(r)

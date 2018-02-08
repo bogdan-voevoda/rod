@@ -66,12 +66,15 @@ proc getBuffer*(b: BinDeserializer, T: typedesc, len: int): BufferView[T] =
         b.align(sizeof(dummy[0]))
     else:
         b.align(alignsize(T))
-    let s = StringStream(b.stream)
-    let offset = b.getPosition()
-    assert(s.data.len > offset + len)
-    result.mData = cast[ptr UncheckedArr[T]](cast[pointer](addr s.data[offset]))
-    result.len = len
-    b.setPosition(offset + len * sizeof(T))
+    when defined(js):
+        raise newException(Exception, "Not implemented")
+    else:
+        let s = StringStream(b.stream)
+        let offset = b.getPosition()
+        assert(s.data.len > offset + len)
+        result.mData = cast[ptr UncheckedArr[T]](cast[pointer](addr s.data[offset]))
+        result.len = len
+        b.setPosition(offset + len * sizeof(T))
 
 proc init(b: BinDeserializer) =
     var strtabLen = b.readInt16()
@@ -147,8 +150,8 @@ proc getImageInfoForIndex(b: BinDeserializer, idx: int16, path: var string, fram
     path = b.basePath & "/" & j["orig"].str
     let joff = j{"off"}
     if not joff.isNil:
-        frameOffset.x = joff[0].getFNum()
-        frameOffset.y = joff[1].getFNum()
+        frameOffset.x = joff[0].getFloat()
+        frameOffset.y = joff[1].getFloat()
 
 proc getImageForIndex(b: BinDeserializer, idx: int16, im: var Image) =
     if idx == -2:

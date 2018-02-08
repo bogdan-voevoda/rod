@@ -1,10 +1,11 @@
-import strutils, ospaths, json, tables, logging
+import strutils, ospaths, json, tables, logging, streams
 import nimx.assets.abstract_asset_bundle as nab
 import nimx / assets / [ url_stream, json_loading, asset_loading, asset_manager, asset_cache ]
 import nimx / [ image, types ]
 import variant
 
-import os, streams
+when not defined(js):
+    import os
 
 import rod.utils.bin_deserializer
 
@@ -38,9 +39,6 @@ method urlForPath*(ab: AssetBundle, path: string): string =
         result = ab.realUrlForPath(path)
 
 proc init(ab: AssetBundle, handler: proc()) {.inline.} =
-    # echo "INIT AB: ", ab.mBaseUrl
-    let rpPath = ab.mBaseUrl["file://".len .. ^1] / "comps.rodpack"
-    # echo "RPPATH: ", rpPath
     var indexComplete = false
     var compsComplete = false
 
@@ -52,11 +50,12 @@ proc init(ab: AssetBundle, handler: proc()) {.inline.} =
     openStreamForUrl(ab.mBaseUrl / "comps.rodpack") do(s: Stream, err: string):
         if not s.isNil:
             var ss = s
-            if not (s of StringStream):
-                var str = s.readAll()
-                s.close()
-                shallow(str)
-                ss = newStringStream(str)
+            when not defined(js):
+                if not (s of StringStream):
+                    var str = s.readAll()
+                    s.close()
+                    shallow(str)
+                    ss = newStringStream(str)
             echo "Create bindeser: ", ab.mBaseUrl
             ab.binDeserializer = newBinDeserializer(ss)
             ab.binDeserializer.basePath = ab.path
@@ -220,7 +219,9 @@ when not defined(js) and not defined(emscripten) and not defined(windows):
         removeFile(zipFileName)
         result = true
 
-    proc downloadAndUnzip(url, destPath: string, ctx: pointer) =
+    proc downloadAndUnzip(url, destPath: string, ctx: pointer) {.used.} =
+        let zipFilePath = destPath & ".gz"
+
         try:
             when defined(ssl):
                 when defined(windows) or defined(android):
@@ -230,9 +231,6 @@ when not defined(js) and not defined(emscripten) and not defined(windows):
                 let client = newHttpClient(sslContext = sslCtx)
             else:
                 let client = newHttpClient(sslContext = nil)
-
-            let zipFilePath = destPath & ".gz"
-            discard tryRemoveFile(zipFilePath)
 
             client.downloadFile(url, zipFilePath)
             client.close()
@@ -246,7 +244,9 @@ when not defined(js) and not defined(emscripten) and not defined(windows):
             let cerrorMsg = cast[cstring](allocShared(errorMsg.len + 1))
             copyMem(cerrorMsg, addr errorMsg[0], errorMsg.len + 1)
             cast[DownloadCtx](ctx).errorMsg = cerrorMsg
+            removeDir(destPath)
         finally:
+            discard tryRemoveFile(zipFilePath)
             performOnMainThread(onDownloadComplete, ctx)
 
 proc downloadedAssetsDir(abd: AssetBundleDescriptor): string =
@@ -289,16 +289,23 @@ proc newAssetBundle(abd: AssetBundleDescriptor): AssetBundle =
             else:
                 result = newNativeAssetBundle(abd.path)
 
-proc loadAssetBundle*(abd: AssetBundleDescriptor, handler: proc(mountPath: string, ab: AssetBundle)) =
+proc loadAssetBundle*(abd: AssetBundleDescriptor, handler: proc(mountPath: string, ab: AssetBundle, err: string)) =
     abd.downloadAssetBundle() do(err: string):
         if err.isNil:
             let ab = newAssetBundle(abd)
             ab.init() do():
-                handler(abd.path, ab)
+                handler(abd.path, ab, nil)
         else:
             warn "Asset bundle error for ", abd.hash, " (", abd.path, "): " , err
+            handler(abd.path, nil, err)
 
-proc loadAssetBundles*(abds: openarray[AssetBundleDescriptor], handler: proc(mountPaths: openarray[string], abs: openarray[AssetBundle])) =
+proc loadAssetBundle*(abd: AssetBundleDescriptor, handler: proc(mountPath: string, ab: AssetBundle)) {.deprecated.}  =
+    let newHandler = proc(mountPaths: string, ab: AssetBundle, err: string) =
+        if not handler.isNil: handler(mountPaths, ab)
+
+    loadAssetBundle(abd, newHandler)
+
+proc loadAssetBundles*(abds: openarray[AssetBundleDescriptor], handler: proc(mountPaths: openarray[string], abs: openarray[AssetBundle], err: string)) =
     var mountPaths = newSeq[string](abds.len)
     var abs = newSeq[AssetBundle](abds.len)
     let abds = @abds
@@ -306,14 +313,23 @@ proc loadAssetBundles*(abds: openarray[AssetBundleDescriptor], handler: proc(mou
 
     proc load() =
         if i == abds.len:
-            handler(mountPaths, abs)
+            handler(mountPaths, abs, nil)
         else:
-            abds[i].loadAssetBundle() do(mountPath: string, ab: AssetBundle):
-                abs[i] = ab
-                mountPaths[i] = mountPath
-                inc i
-                load()
+            abds[i].loadAssetBundle() do(mountPath: string, ab: AssetBundle, err: string):
+                if not err.isNil:
+                    handler(mountPaths, abs, err)
+                else:
+                    abs[i] = ab
+                    mountPaths[i] = mountPath
+                    inc i
+                    load()
     load()
+
+proc loadAssetBundles*(abds: openarray[AssetBundleDescriptor], handler: proc(mountPaths: openarray[string], abs: openarray[AssetBundle])) {.deprecated.} =
+    let newHandler = proc(mountPaths: openarray[string], abs: openarray[AssetBundle], err: string) =
+        if not handler.isNil: handler(mountPaths, abs)
+
+    loadAssetBundles(abds, newHandler)
 
 registerAssetLoader(["rod_ss"], ["png", "jpg", "jpeg", "gif", "tif", "tiff", "tga"]) do(url, path: string, cache: AssetCache, handler: proc()):
     const prefix = "rod_ss://"
@@ -331,13 +347,13 @@ registerAssetLoader(["rod_ss"], ["png", "jpg", "jpeg", "gif", "tif", "tiff", "tg
             for j in rab.spriteSheets[path]:
                 let jt = j["tex"]
                 let texCoords = [
-                    jt[0].getFNum().float32,
-                    jt[1].getFNum().float32,
-                    jt[2].getFNum().float32,
-                    jt[3].getFNum().float32
+                    jt[0].getFloat().float32,
+                    jt[1].getFloat().float32,
+                    jt[2].getFloat().float32,
+                    jt[3].getFloat().float32
                 ]
                 let js = j["size"]
-                let sz = newSize(js[0].getFNum(), js[1].getFNum())
+                let sz = newSize(js[0].getFloat(), js[1].getFloat())
                 let imagePath = rab.path & '/' & j["orig"].str
                 let si: Image = i.subimageWithTexCoords(sz, texCoords)
                 si.setFilePath(imagePath)
