@@ -99,8 +99,95 @@ proc absImagePath(compPath, imageRelPath: string): string =
     result = compPath.parentDir / imageRelPath
     result.normalizePath()
 
+type CompTree* = ref object
+    children*: seq[CompTree]
+    path*: string
+    images*: seq[string]
+
+proc newCompTree(path: string): CompTree =
+    result.new()
+    result.path = path
+    result.children = @[]
+    result.images = @[]
+
+proc findComp*(n: CompTree, p: proc(n: CompTree): bool): CompTree =
+    if p(n):
+        result = n
+    else:
+        for c in n.children:
+            result = c.findComp(p)
+            if not result.isNil: break
+
+proc findComp*(n: CompTree, path: string): CompTree =
+    n.findComp proc(n: CompTree): bool =
+        n.path == path
+
+proc `$`*(c: CompTree): string =
+    const whitespaceStep = 2
+    proc prnt(c: CompTree, prefCount: int): string =
+        let pref = ' '.repeat(prefCount)
+        result = pref & "--path: " & c.path & "\n"
+        for i in c.images:
+            result &= pref & pref & "img: " & i & "\n"
+        for ch in c.children:
+            result &= pref & ch.prnt(prefCount + whitespaceStep)
+    result = c.prnt(whitespaceStep)
+
+proc `==`*(c0, c1: CompTree): bool =
+    if c0.path != c1.path:
+        return false
+    if c0.images.len != c1.images.len:
+        return false
+    for i in 0..<c0.images.len:
+        if c0.images[i] != c1.images[i]:
+            return false
+    if c0.children.len == c1.children.len:
+        return false
+    for i in 0..<c0.children.len:
+        if not (c0.children[i] == c1.children[i]):
+            return false
+    return true
+
+proc `!=`*(c0, c1: CompTree): bool =
+    not (c0 == c1)
+
+proc toJson*(c: CompTree): JsonNode =
+    result = json.`%*`({"path": c.path})
+    if c.images.len > 0:
+        var jImages = newJArray()
+        for img in c.images:
+            jImages.add(%img)
+        result.add("images", jImages)
+    if c.children.len > 0:
+        var jChildren = newJArray()
+        for ch in c.children:
+            jChildren.add(ch.toJson())
+        result.add("children", jChildren)
+
+proc newCompTreeFromJson*(j: JsonNode): CompTree =
+    var v = j{"path"}
+    if not v.isNil:
+        result = newCompTree(v.str)
+    v = j{"images"}
+    if not v.isNil:
+        for img in v:
+            result.images.add(img.str)
+    v = j{"children"}
+    if not v.isNil:
+        for ch in v:
+            result.children.add(newCompTreeFromJson(ch))
+
+var imgMap* = initTable[string, Table[string, int]]()
+                     # imgname, tbl: [jcompname, numberof]
+
+var jcompMap* = initTable[string, CompTree]()
+
 proc checkCompositionRefs(c: JsonNode, compPath, originalResPath: string) =
     var missingRefs = newSeq[string]()
+
+    var cp = newCompTree(compPath)
+    jcompMap[compPath] = cp
+
     for n in c.allNodes:
         let jcr = n{"compositionRef"}
         if not jcr.isNil:
@@ -108,6 +195,9 @@ proc checkCompositionRefs(c: JsonNode, compPath, originalResPath: string) =
             let acr = absImagePath(compPath, cr).changeFileExt("")
             if not (fileExists(acr & ".json") or fileExists(acr & ".jcomp")):
                 missingRefs.add(acr)
+            else:
+                cp.children.add(newCompTree(acr & ".jcomp"))
+
     if missingRefs.len != 0:
         echo "Missing compositionRefs in ", compPath, ":"
         for m in missingRefs:
@@ -137,10 +227,27 @@ proc collectImageOccurences(tool: ImgTool): seq[ImageOccurence] {.inline.} =
                 allowAlphaCrop: alphaCrop
             ))
 
+        let imgsComposition = jcompMap[compPath]
+
+        template addImageComposition(filepath: string) =
+            let imgpath = absImagePath(compPath, filepath)
+            if not imgMap.hasKey(imgpath):
+                imgMap[imgpath] = initTable[string, int]()
+            if imgMap[imgpath].hasKey(compPath):
+                let imgsCount = imgMap[imgpath][compPath] + 1
+                imgMap[imgpath][compPath] = imgsCount
+            else:
+                imgMap[imgpath][compPath] = 1
+            imgsComposition.images.add(imgpath)
+
+
         for n, s in c.allSpriteNodes:
             let fileNames = s["fileNames"]
             for ifn in 0 ..< fileNames.len:
                 if fileNames[ifn].kind == JString:
+
+                    addImageComposition(fileNames[ifn].str)
+
                     addOccurence(fileNames[ifn].str, ImageOccurenceInfo(parentComposition: c,
                             parentNode: n, parentComponent: s, frameIndex: ifn,
                             compPath: compPath), true)
@@ -153,14 +260,37 @@ proc collectImageOccurences(tool: ImgTool): seq[ImageOccurence] {.inline.} =
 
                 let t = s{key}
                 if not t.isNil and t.kind == JString:
+
+                    addImageComposition(t.str)
+
                     addOccurence(t.str, ImageOccurenceInfo(parentComposition: c,
                             parentNode: n, parentComponent: s, textureKey: key,
                             compPath: compPath))
 
-        for n, s in c.allComponentNodesOfType("ParticleSystem"):
-            for key in ["texture"]:
+
+        var typeAndName = [["ParticleSystem", "texture"], ["Trail", "trailImage"]]
+        for el in typeAndName:
+            let elType = el[0]
+            let elName = el[1]
+
+            for n, s in c.allComponentNodesOfType(elType):
+                for key in [elName]:
+                    let t = s{key}
+                    if not t.isNil and t.kind == JString:
+
+                        addImageComposition(t.str)
+
+                        addOccurence(t.str, ImageOccurenceInfo(parentComposition: c,
+                                parentNode: n, parentComponent: s, textureKey: key,
+                                compPath: compPath))
+
+        for n, s in c.allComponentNodesOfType("Blink"):
+            for key in ["mask", "light"]:
                 let t = s{key}
                 if not t.isNil and t.kind == JString:
+
+                    addImageComposition(t.str)
+
                     addOccurence(t.str, ImageOccurenceInfo(parentComposition: c,
                             parentNode: n, parentComponent: s, textureKey: key,
                             compPath: compPath))
@@ -310,6 +440,20 @@ proc run*(tool: ImgTool) =
         echo "Comppack written: ", tool.resPath / "comps.rodpack", " alignment bytes: ", b.totalAlignBytes
 
     sync() # Wait until spritesheet optimizations complete
+
+    var tmp: seq[string] = @[]
+    proc linkChildren(c: CompTree) =
+        for ch in c.children:
+            if ch.path in jcompMap:
+                let jChild = jcompMap[ch.path]
+                ch.children = jChild.children
+                ch.images = jChild.images
+                tmp.add(ch.path)
+
+    for k, j in jcompMap:
+        j.linkChildren()
+    for t in tmp: jcompMap.del(t)
+
 
 proc runImgToolForCompositions*(compositionPatterns: openarray[string], outPrefix: string, compressOutput: bool = true) =
     var tool = newImgTool()

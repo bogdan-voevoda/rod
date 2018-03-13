@@ -1,4 +1,4 @@
-import os, strutils, times, osproc, sets, logging, macros
+import os, strutils, times, osproc, sets, logging, macros, tables
 import imgtool, asset_cache, migrator
 import settings except hash
 import json except hash
@@ -162,6 +162,105 @@ proc pack(cache: string = "", platform: string = "",
             if debug or not s.debugOnly:
                 updateSettingsWithCmdLine()
                 packSingleAssetBundle(s, cache, onlyCache, src & "/" & path, dst & "/" & path)
+
+
+    var oldImageMapJson: JsonNode
+    var oldJcompMapJson: JsonNode
+
+    var oldImgMap = initTable[string, Table[string, int]]()
+    var oldJcompMap = initTable[string, CompTree]()
+
+    try:
+        oldImageMapJson = json.parseFile("image_map.json")
+
+        for ch in oldImageMapJson:
+            var v = ch{"path"}
+            if not v.isNil:
+                oldImgMap[v.str] = initTable[string, int]()
+            v = ch{"compositions"}
+            if not v.isNil:
+                for cmp in v:
+                    let path = cmp{"path"}
+                    let usg = cmp{"usage"}
+                    if not path.isNil:
+                        if not usg.isNil:
+                            oldImgMap[v.str][path.str] = usg.getNum().int
+
+        oldJcompMapJson = json.parseFile("jcomp_map.json")
+
+        for ch in oldJcompMapJson:
+            let cmp = ch.newCompTreeFromJson()
+            oldJcompMap[cmp.path] = cmp
+    except:
+        discard
+
+
+    var imageMapArr = newJArray()
+    for k, j in imgMap:
+        var jComps = newJArray()
+        for i, s in j:
+            jComps.add( json.`%*`({"path": i, "usage": $s}) )
+        imageMapArr.add( json.`%*`({"path": k, "compositions": jComps}) )
+
+    # writeFile("image_map.json", imageMapArr.pretty())
+
+    var jMapArr = newJArray()
+    # for k, j in jcompMap:
+    #     jMapArr.add(j.toJson())
+
+
+    # for k, j in oldJcompMap:
+    #     jMapArr.add(j.toJson())
+
+    for k, j in jcompMap:
+        # if not jcompMap.hasKey(k) or jcompMap[k] != j:
+        jMapArr.add(jcompMap[k].toJson())
+
+    # writeFile("jcomp_map.json", jMapArr.pretty())
+
+
+    proc cleanImgsRec(c: CompTree, res: var Table[string, int]) =
+        let v = res.getOrDefault(c.path)
+        res[c.path] = v + 1
+        for i in c.images:
+            let newImgCount = imgMap[i][c.path] - 1
+            imgMap[i][c.path] = newImgCount
+        for ch in c.children:
+            ch.cleanImgsRec(res)
+
+    proc removeJbranch(name: string): Table[string, int] =
+        var res = initTable[string, int]()
+        for k, j in jcompMap:
+            let jComp = j.findComp(name)
+            if not jComp.isNil:
+                jComp.cleanImgsRec(res)
+        result = res
+
+    proc readyForDeleteImages(): seq[string] =
+        result = @[]
+        for imgPath, comps in imgMap:
+            var counter = 0
+            for jcompPath, count in comps:
+                if count <= 0:
+                    inc counter
+            if counter == comps.len:
+                result.add(imgPath)
+
+    for r in walkDirRec("res"):
+        let sf = r.splitFile()
+        if not sf.name.startsWith('.') and not r.contains("tiledmap") and not r.contains("ios"):
+            case sf.ext
+            of ".png":
+                if not (r in imgMap):
+                    imgMap[r] = initTable[string, int]()
+
+
+    # let jcompsRemove = removeJbranch("res/common/gui/popups/precomps/Tournament_Bar/Main.jcomp")
+    let toDelIMg = readyForDeleteImages()
+    var imgToDeleteArr = newJArray()
+    for el in toDelIMg:
+        imgToDeleteArr.add(%el)
+    # writeFile("img_to_delete.json", imgToDeleteArr.pretty())
 
 proc ls(debug: bool = false, androidExternal: bool = false, resDir: string) =
     for path, ab in assetBundles(resDir, true):
